@@ -66,6 +66,7 @@ type 'a local_language = {
 
 type 'a reg = 
 	| Letter of 'a
+	| CharactersCode of 'a list
 	| Or of 'a reg * 'a reg 
 	| Optional of 'a reg
 	| Repeat of 'a reg
@@ -100,6 +101,16 @@ let rec concat_list = function
 	| a::q -> Concat (a, (concat_list q))
 let special_chars = ['('; ')'; '|'; '?';'+';'*';'\\'];;
 
+let rec cut_at_not_escaped_square_bracket l = 
+	match l with 
+	 | [] -> failwith "']' missing !"
+	 | ('\\', n)::a::l' -> let (c, q) = cut_at_not_escaped_square_bracket l' in
+	 	( ('\\', n)::a::c, q )
+	 | (']', _)::l' -> ([], l')
+	 | ('[', n)::l' -> (failwith "Second '[' opened at position "^(string_of_int n)^" maybe you forgot to escape it ?" )
+	 | a::l' -> let (c, q) = cut_at_not_escaped_square_bracket l' in
+	 	( a::c, q )
+
 let regex_of_text (t : (char*int) list) : (char*int) reg  = 
 	let rec aux res or_content on_going = function
 	| (')', n)::q -> (concat_list [res; or_content; on_going], (')', n)::q)
@@ -108,6 +119,7 @@ let regex_of_text (t : (char*int) list) : (char*int) reg  =
 		| (reg1, (')', _)::q') -> aux res (Concat(or_content,on_going)) reg1 q'
 		| _ -> failwith ("Parentheses at position "^string_of_int n ^ " is not closed ")
 	end
+	| ('[', n)::q -> let (c,q') = cut_at_not_escaped_square_bracket q in aux res (Concat(or_content,on_going)) (CharactersCode c) q'
 	| ('|', _)::q -> let (reg1, q') = aux Epsilon Epsilon Epsilon q in aux res (Or(Concat(or_content,on_going),reg1)) Epsilon q'
 	| ('?', _)::q -> aux res or_content (Optional on_going) q
 	| ('+', _)::q -> aux res or_content (Repeat on_going) q
@@ -122,12 +134,13 @@ let regex_of_text (t : (char*int) list) : (char*int) reg  =
 	in 
 	match aux Epsilon Epsilon Epsilon t with 
 		| (reg, []) -> reg
-		| (_ , (a,n)::_) -> failwith ("unexpected "^(String.make 1 a)^" at postion "^string_of_int n)
-	
+		| (_ , (a,n)::_) -> failwith ("unexpected '"^(String.make 1 a)^"' at postion "^string_of_int n)
+	 
 
 let rec simplify_regex reg =
 	match reg with 
 	| Letter a -> reg 
+	| CharactersCode c -> reg 
 	| Or (a,b) -> begin
 		let (a',b') = (simplify_regex a, simplify_regex b) in 
 		if a' = Epsilon then b' else if b' = Epsilon then a' else Or(a', b')
