@@ -46,6 +46,7 @@ type 'a reg =
 	| Concat of 'a reg * 'a reg
 	| Epsilon
 
+type 'a cap_reg = ('a reg)*((int*int) list)
 type state = char*int;;
 
 let linearise (regex : 'a list ) : ('a*int) list =
@@ -75,12 +76,13 @@ let rec concat_list : ('a reg) list -> 'a reg  = function
 
 let special_chars : char list = ['('; ')'; '|'; '?';'+';'*';'\\';'.']
 
-let regex_of_text (t : (char*int) list) : (char*int) reg   =
+let capture_regex_of_text (t : (char*int) list) : (char*int) cap_reg   =
+	let parentheses = ref [] in 
 	let rec aux res or_content on_going = function
 	| (')', n)::q -> (concat_list [res; or_content; on_going], (')', n)::q)
 	| ('(', n)::q -> begin
 		match aux res Epsilon Epsilon q with 
-		| (reg1, (')', _)::q') -> aux res (Concat(or_content,on_going)) reg1 q' 
+		| (reg1, (')', m)::q') -> ( parentheses := (n,m)::!parentheses ; aux res (Concat(or_content,on_going)) reg1 q' )
 		| _ -> failwith ("Parentheses at position "^string_of_int n ^ " is not closed ")
 	end
 	| ('|', _)::q -> let (reg1, q') = aux Epsilon Epsilon Epsilon q in aux res (Or(Concat(or_content,on_going),reg1)) Epsilon q'
@@ -123,7 +125,7 @@ let regex_of_text (t : (char*int) list) : (char*int) reg   =
 	| [] -> (concat_list [res; or_content; on_going], [])
 	in 
 	match aux Epsilon Epsilon Epsilon t with 
-		| (reg, []) -> reg
+		| (reg, []) -> reg , ( List.sort (fun (n1,m1) (n2,m2) -> n1 - n2) !parentheses) 
 		| (_ , (a,n)::_) -> failwith ("unexpected "^(String.make 1 a)^" at postion "^string_of_int n)
 	
 
@@ -216,24 +218,29 @@ let automaton_without_jokers (auto : (int,'a list) automaton) : (int , 'a) autom
 		)
 	}
 
-let automaton_of_regex_text txt =
+let capture_automaton_of_regex_text txt =
+	let (re,prt) = 
+	capture_regex_of_text (
+		linearise (
+			char_list_of_string txt
+		)
+	) in  
 	automaton_without_jokers (
 		automaton_without_numerotation (
 			automaton_of_local_language (
 				local_language_of_local (
 					local_of_regex (
 						simplify_regex(
-							regex_of_text (
-									linearise (
-										char_list_of_string txt
-									)
-								)
+							re
 						)
 					)
 				)
 			)
 		)
-	)
+	), prt
+
+let automaton_of_regex_text txt = 
+	let (auto, p) = capture_automaton_of_regex_text txt in auto
 
 let possible_transitions (auto : ('a, char) automaton) (s : 'a list) : (('a list * char) * 'a list) list =
 	let t = Array.make 256 [] in
@@ -301,9 +308,78 @@ let accessible_end_state (auto :('a, 'c) language_determinist_automaton) (word:s
 	let final_state = run_automaton_on auto word in
 	Hashtbl.find auto.ending_info final_state
 
+let run_capture_automaton_on (auto : 'a language_determinised_automaton) (listed_word : char list) : ('a list) * ('a list list) =
+	let states = ref [] in 
+	let rec run_from s w =
+		states := s::!states;
+		match w with 
+			| [] -> ()
+			| l::w' ->  run_from (Hashtbl.find auto.delta_htbl (s,l)) w'
+	in run_from auto.init_state listed_word;
+	match !states with
+		| [] -> failwith "pas possible par construction"
+		| final_state::q -> (final_state, q)
+
+type compiled_capturer = {
+	nb_parentheses : int;
+	parentheses : capture_positions; 
+	determinised_auto : regex_det_auto; 
+	backwards_delta : ((char*int), int) Hashtbl.t
+}
+type compiled_recognizer = regex_det_auto
+
+let compile_capture_regex re_text =
+	let (auto, ps) = capture_automaton_of_regex_text re_text in 
+	let det_auto = determinised_automaton auto in
+	let back_delta = Hashtbl.create (List.length auto.transitions) in
+	let rec init_back_delta tr =
+		match tr with
+			| [] -> ()
+			| (q,a,q')::tr' -> (Hashtbl.add back_delta (a,q') q ;init_back_delta tr')
+	in init_back_delta auto.transitions;
+	let np = List.length ps in
+	{
+		nb_parentheses = np;
+		parentheses = ps; 
+		determinised_auto = det_auto; 
+		backwards_delta = back_delta
+	}
+
+let captured cap_re word = 
+	let captures = Array.make cap_re.nb_parentheses "" in
+	let listed_word = char_list_of_string word in
+	let (final_det_state, q ) = run_capture_automaton_on cap_re.determinised_auto listed_word in
+	match (Hashtbl.find cap_re.determinised_auto.ending_info final_det_state) with
+		| None -> None
+		| Some final_state -> 
+		let rec find_path (l : int list list) (w : char list) (elem : int) :int list =
+			match l,  w with
+				| [],[] ->((if elem <> -1 then failwith "OOOH !!!"); []) (* le dernier élément elem est ignoré, c'est toujours l'état initial*)
+				| [],_ | _,[] -> failwith "pas possible car |w| = |l|"
+				| sl::q', a::w' -> match do_intersect (Hashtbl.find_all cap_re.backwards_delta (a, elem)) sl with
+									| None -> failwith "pas possible par construction de l'automate déterminisé"
+									| Some s -> elem::(find_path q' w' s)
+		in let reversed_word = List.rev listed_word in
+		let rev_path = find_path q reversed_word final_state in
+		let rec write_captures rev_w rev_pth =
+			match rev_w, rev_pth with
+				| [], [] -> ()
+				| [], _ | _, [] -> failwith "pas possible"
+				| a::rev_w', s::rev_pth' -> 
+					(let rec add_to_captures p i =
+						match p with
+							| [] -> ()
+							| (n,m)::ps' -> (if n <= s && s <= m  then captures.(i) <- ( String.make 1 a )^captures.(i) else () ; add_to_captures ps' (i+1) )
+					in add_to_captures cap_re.parentheses 0;
+				write_captures rev_w' rev_pth')
+		in write_captures reversed_word rev_path ;
+		Some captures
 
 let recognized (auto :('a, 'c) language_determinist_automaton) (word:string): bool =
 	accessible_end_state auto word <> None
 
 let recognizer (reg : string) : string -> bool =
 	recognized (compile_regex reg)
+
+let capturer (reg : string) : string -> string array option =
+	captured (compile_capture_regex reg)
