@@ -117,8 +117,7 @@ let rec local_of_regex : ('a*int) reg -> ('a list * int) local = function
 
 let rec add_allowed_transitions_within_capture ( re : (char*int) reg ) ( n : int) ( ht : (int*int*int, bool) Hashtbl.t ) =
 	let (_, _ , _, transitions ) = local_of_regex re in
-	List.iter (fun ((_,s1),(_,s2)) -> Hashtbl.add ht (n, s1, s2) true )
-
+	List.iter (fun ((_,s1),(_,s2)) -> Hashtbl.add ht (n, s1, s2) true ) transitions
 
 let capture_regex_of_text (t : (char*int) list) : (char*int) cap_reg   =
 	let nb_parentheses = ref 0 in
@@ -386,6 +385,7 @@ let compile_capture_regex re_text =
 let captured cap_re word = 
 	let captures = Array.make cap_re.captures_info.nb_parentheses "" in
 	let listed_word = char_list_of_string word in
+	let ht = cap_re.captures_info.allowed_transitions_within_capture in 
 	match run_capture_automaton_on cap_re.determinised_auto listed_word with 
 		| None -> None
 		| Some (final_det_state, q ) ->
@@ -410,9 +410,9 @@ let captured cap_re word =
 						match p with
 							| [] -> ()
 							| (n,m)::ps' -> (
-										(match Hashtbl.find_opt cap_re.captures_info.allowed_transitions_within_capture (n, s, prev_s) with
+										(match Hashtbl.find_opt ht (n, s, prev_s) with
 											| None -> if n <= s && s <= m then captures.(i) <- ( String.make 1 a )
-											| Some true -> captures.(i) <- ( String.make 1 a )^captures.(i) 
+											| Some true -> (captures.(i) <- ( String.make 1 a )^captures.(i)) 
 											| _ -> failwith "pas possible");
 										add_to_captures ps' (i+1) 
 										)
