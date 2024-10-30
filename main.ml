@@ -383,7 +383,7 @@ let compile_capture_regex re_text =
 	}
 
 let captured cap_re word = 
-	let captures = Array.make cap_re.captures_info.nb_parentheses "" in
+	let captures = Array.make cap_re.captures_info.nb_parentheses [] in
 	let listed_word = char_list_of_string word in
 	let ht = cap_re.captures_info.allowed_transitions_within_capture in 
 	match run_capture_automaton_on cap_re.determinised_auto listed_word with 
@@ -411,8 +411,10 @@ let captured cap_re word =
 							| [] -> ()
 							| (n,m)::ps' -> (
 										(match Hashtbl.find_opt ht (n, s, prev_s) with
-											| None -> if n <= s && s <= m then captures.(i) <- ( String.make 1 a )
-											| Some true -> (captures.(i) <- ( String.make 1 a )^captures.(i)) 
+											| None -> if n <= s && s <= m then captures.(i) <- (String.make 1 a)::captures.(i)
+											| Some true -> (match captures.(i) with
+																| accu::q -> captures.(i) <- (( String.make 1 a )^accu)::q
+																| [] -> failwith "pas possible") 
 											| _ -> failwith "pas possible");
 										add_to_captures ps' (i+1) 
 										)
@@ -430,5 +432,5 @@ let recognized (auto :('a, 'c) language_determinist_automaton) (word:string): bo
 let recognizer (reg : string) : string -> bool =
 	recognized (compile_regex reg)
 
-let capturer (reg : string) : string -> string array option =
+let capturer (reg : string) : string -> string list array option =
 	captured (compile_capture_regex reg)
