@@ -4,11 +4,13 @@ let rec string_of_char_list = function
 	| c::q -> (String.make 1 c)^(string_of_char_list q)
 
 let rec range (i:int) (j:int) : int list =
-	if i < j then i::(range (i+1) j) else []
+	if i <= j then i::(range (i+1) j) else []
 let char_range (i:int) (j:int) : char list =
 	List.map Char.chr (range i j)
 let range_char (c1:char)(c2:char) : char list =
 	char_range (Char.code c1) (Char.code c2)
+let subtract (l1 : 'a list) (l2 : 'a list) : 'a list =
+	List.filter (fun x -> not (List.mem x l2)) l1
 
 type ('a ,'b) automaton = {
 	init_states: 'a list;
@@ -74,9 +76,12 @@ let rec concat_list : ('a reg) list -> 'a reg  = function
 	| [] -> Epsilon
 	| a::q -> Concat (a, (concat_list q))
 
+let range_all : char list = char_range 0 255
 let special_chars : char list = ['('; ')'; '|'; '?';'+';'*';'\\';'.']
-let char_classes : char list = ['s';'d']
-let classes : char list list = [ [' '; '\n'; '\t']; range_char '0' '9' ]
+let char_classes : char list = ['s';'d';'w';'S';'D';'W']
+let classes : char list list = [ [' '; '\n'; '\t'; '\r']; range_char '0' '9';'_'::(range_char '0' '9')@(range_char 'a' 'z')@(range_char 'A' 'Z');
+								subtract range_all [' '; '\n'; '\t'; '\r'] ; subtract range_all (range_char '0' '9'); 
+								subtract range_all ('_'::(range_char '0' '9')@(range_char 'a' 'z')@(range_char 'A' 'Z')) ]
 
 let search_char_class (c : char) : char list option =
 	let rec aux ch_l cl_l =
@@ -100,7 +105,7 @@ let capture_regex_of_text (t : (char*int) list) : (char*int) cap_reg   =
 	| ('?', _)::q -> aux res or_content (Optional on_going) q
 	| ('+', _)::q -> aux res or_content (Repeat on_going) q
 	| ('*', _)::q -> aux res or_content (Optional (Repeat on_going)) q
-	| ('.', n)::q -> aux res (Concat(or_content,on_going)) (Joker ((char_range 0 256) , n) ) q
+	| ('.', n)::q -> aux res (Concat(or_content,on_going)) (Joker ((subtract (char_range 0 255) ['\r'; '\n']) , n) ) q
 	| ('[', n)::q -> let rec get_inside_brackets l =
 						match l with 
 							| [] -> failwith ("bracket [ at postion "^(string_of_int n)^" not closed")
