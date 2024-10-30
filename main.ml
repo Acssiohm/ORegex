@@ -75,6 +75,17 @@ let rec concat_list : ('a reg) list -> 'a reg  = function
 	| a::q -> Concat (a, (concat_list q))
 
 let special_chars : char list = ['('; ')'; '|'; '?';'+';'*';'\\';'.']
+let char_classes : char list = ['s';'d']
+let classes : char list list = [ [' '; '\n'; '\t']; range_char '0' '9' ]
+
+let search_char_class (c : char) : char list option =
+	let rec aux ch_l cl_l =
+		match ch_l, cl_l with 
+			| [],[] -> None
+			| [], _ | _, [] -> failwith "Erreur : les listes char_classes et classes ne sont pas de la même taille : à jour ?"
+			| ch::ch_l' , cl::cl_l' -> if ch = c then Some cl else aux ch_l' cl_l'
+	in aux char_classes classes
+
 
 let capture_regex_of_text (t : (char*int) list) : (char*int) cap_reg   =
 	let parentheses = ref [] in 
@@ -117,8 +128,10 @@ let capture_regex_of_text (t : (char*int) list) : (char*int) cap_reg   =
 						aux res (Concat(or_content,on_going)) (Joker (cs , n) ) q'
 
 	| ('\\', _)::(ch,n)::q -> 
-		if not (List.mem ch special_chars) then 
-		failwith ("Cannot escape non special character : '"^(String.make 1 ch)^"' at position "^(string_of_int n) )
+		if not (List.mem ch special_chars) then
+		match search_char_class ch with
+			| None -> failwith ("Cannot escape non special character : '"^(String.make 1 ch)^"' at position "^(string_of_int n) )
+			| Some cl -> aux res (Concat(or_content,on_going)) (Joker (cl , n) ) q
 		else aux res (Concat(or_content,on_going)) (Letter (ch,n)) q
 	| (ch,n)::q -> if ch = '\\' then failwith "Cannot end the string with backslash, backslash has to escape something !"
 	else aux res (Concat(or_content,on_going)) (Letter (ch,n)) q
@@ -354,7 +367,7 @@ let captured cap_re word =
 		| Some final_state -> 
 		let rec find_path (l : int list list) (w : char list) (elem : int) :int list =
 			match l,  w with
-				| [],[] ->((if elem <> -1 then failwith "OOOH !!!"); []) (* le dernier élément elem est ignoré, c'est toujours l'état initial*)
+				| [],[] -> [] (* le dernier élément elem est ignoré, c'est toujours l'état initial i.e. -1*)
 				| [],_ | _,[] -> failwith "pas possible car |w| = |l|"
 				| sl::q', a::w' -> match do_intersect (Hashtbl.find_all cap_re.backwards_delta (a, elem)) sl with
 									| None -> failwith "pas possible par construction de l'automate déterminisé"
