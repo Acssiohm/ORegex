@@ -126,7 +126,6 @@ let capture_regex_of_text (t : (char*int) list) : (char*int) cap_reg   =
 						let ( l , q') = get_inside_brackets q in 
 						let cs = get_char_set l in 
 						aux res (Concat(or_content,on_going)) (Joker (cs , n) ) q'
-
 	| ('\\', _)::(ch,n)::q -> 
 		if not (List.mem ch special_chars) then
 		match search_char_class ch with
@@ -309,29 +308,34 @@ let determinised_automaton (auto: ('a, char) automaton) : 'a language_determinis
 let compile_regex (re_text : string) : regex_det_auto =
 	determinised_automaton (automaton_of_regex_text re_text)
 
-let run_automaton_on (auto : 'a language_determinised_automaton) (word : string) : 'a list =
+let run_automaton_on (auto : 'a language_determinised_automaton) (word : string) : 'a list option =
 	let listed_word = char_list_of_string word in 
-	let rec run_from s w =
-		match w with 
-			| [] -> s
-			| l::w' -> run_from (Hashtbl.find auto.delta_htbl (s,l)) w'
-	in run_from auto.init_state listed_word;;
+	let rec run_from s_opt w =
+		match s_opt with
+			| None -> None
+			| Some s -> match w with 
+						| [] -> Some s
+						| l::w' -> run_from (Hashtbl.find_opt auto.delta_htbl (s,l)) w'
+	in run_from (Some auto.init_state) listed_word;;
 
 let accessible_end_state (auto :('a, 'c) language_determinist_automaton) (word:string): 'c option =
-	let final_state = run_automaton_on auto word in
-	Hashtbl.find auto.ending_info final_state
+	match run_automaton_on auto word with
+		| None -> None 
+		| Some final_state -> Hashtbl.find auto.ending_info final_state
 
-let run_capture_automaton_on (auto : 'a language_determinised_automaton) (listed_word : char list) : ('a list) * ('a list list) =
+let run_capture_automaton_on (auto : 'a language_determinised_automaton) (listed_word : char list) : (('a list) * ('a list list)) option =
 	let states = ref [] in 
-	let rec run_from s w =
-		states := s::!states;
-		match w with 
-			| [] -> ()
-			| l::w' ->  run_from (Hashtbl.find auto.delta_htbl (s,l)) w'
-	in run_from auto.init_state listed_word;
+	let rec run_from s_opt w =
+		match s_opt with
+			| None -> states := []
+			| Some s -> states := s::!states;
+					match w with 
+					| [] -> ()
+					| l::w' ->  run_from (Hashtbl.find_opt auto.delta_htbl (s,l)) w'
+	in run_from (Some auto.init_state) listed_word;
 	match !states with
-		| [] -> failwith "pas possible par construction"
-		| final_state::q -> (final_state, q)
+		| [] -> None
+		| final_state::q -> Some (final_state, q)
 
 type compiled_capturer = {
 	nb_parentheses : int;
@@ -361,7 +365,9 @@ let compile_capture_regex re_text =
 let captured cap_re word = 
 	let captures = Array.make cap_re.nb_parentheses "" in
 	let listed_word = char_list_of_string word in
-	let (final_det_state, q ) = run_capture_automaton_on cap_re.determinised_auto listed_word in
+	match run_capture_automaton_on cap_re.determinised_auto listed_word with 
+		| None -> None
+		| Some (final_det_state, q ) ->
 	match (Hashtbl.find cap_re.determinised_auto.ending_info final_det_state) with
 		| None -> None
 		| Some final_state -> 
@@ -387,6 +393,9 @@ let captured cap_re word =
 				write_captures rev_w' rev_pth')
 		in write_captures reversed_word rev_path ;
 		Some captures
+
+let recognizer_of_capturer cap_re =
+	cap_re.determinised_auto
 
 let recognized (auto :('a, 'c) language_determinist_automaton) (word:string): bool =
 	accessible_end_state auto word <> None
