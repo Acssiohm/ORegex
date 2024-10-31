@@ -1,16 +1,58 @@
+(*********************************************************************************************)
+(************************** General purpose functions ****************************************)
+(*********************************************************************************************)
+
 let char_list_of_string s = List.init (String.length s) (String.get s);;
+
 let rec string_of_char_list = function
 	| [] -> ""
 	| c::q -> (String.make 1 c)^(string_of_char_list q)
 
 let rec range (i:int) (j:int) : int list =
 	if i <= j then i::(range (i+1) j) else []
+
 let char_range (i:int) (j:int) : char list =
 	List.map Char.chr (range i j)
+
 let range_char (c1:char)(c2:char) : char list =
 	char_range (Char.code c1) (Char.code c2)
+
 let subtract (l1 : 'a list) (l2 : 'a list) : 'a list =
 	List.filter (fun x -> not (List.mem x l2)) l1
+
+let rec cartesian_product (a : 'a list ) (b : 'b list ) : ('a * 'b) list = 
+	match (a,b) with 
+		| ([], _) | (_, []) -> []
+		| (a::q, l) -> (List.map (fun x -> (a,x)) l)@(cartesian_product q l);;
+
+let conditional_union (a : 'a list ) (b : 'a list ) (cond : bool) : 'a list =
+	if cond then a@b else a
+
+let put_in_htbl ( tab : ('a*'b) list) : ('a , 'b) Hashtbl.t =
+	let ht = Hashtbl.create (List.length tab) in
+	let rec aux = function 
+		| [] -> ()
+		| (k,v)::q -> ( Hashtbl.add ht k v ; aux q)
+	in aux tab;
+	ht;;
+
+let map_in_tbl (l : 'a list) (f : 'a -> 'b) : ('a, 'b) Hashtbl.t =
+	let ht = Hashtbl.create (List.length l) in 
+	let rec aux = function
+		| [] -> ()
+		| a::q -> (Hashtbl.add ht a (f a) ; aux q)
+	in aux l;
+	ht
+
+let rec do_intersect_on (l1 : 'a list) (l2 : 'a list) : 'a option =
+	match l1 with 
+		| [] -> None
+		| a::q -> if List.mem a l2 then Some a else do_intersect_on q l2
+
+
+(*********************************************************************************************)
+(********************************** Regex types  *********************************************)
+(*********************************************************************************************)
 
 type ('a ,'b) automaton = {
 	init_states: 'a list;
@@ -55,6 +97,18 @@ type 'a reg =
 type 'a cap_reg = ('a reg) * captures_infos
 type state = char*int;;
 
+type compiled_capturer = {
+	captures_info : captures_infos;
+	determinised_auto : regex_det_auto; 
+	backwards_delta : ((char*int), int) Hashtbl.t
+}
+type compiled_recognizer = regex_det_auto
+
+
+(*********************************************************************************************)
+(*************************** Conversion text to regex ****************************************)
+(*********************************************************************************************)
+
 let linearise (regex : 'a list ) : ('a*int) list =
 	let rec aux (n:int) : 'a list -> ('a*int) list = function
 		| [] -> []
@@ -82,10 +136,15 @@ let rec concat_list : ('a reg) list -> 'a reg  = function
 let range_all : char list = char_range 0 255
 let special_chars : char list = ['('; ')'; '|'; '?';'+';'*';'\\';'.']
 let char_classes : char list = ['s';'d';'w';'S';'D';'W']
-let classes : char list list = [ [' '; '\n'; '\t'; '\r']; range_char '0' '9';'_'::(range_char '0' '9')@(range_char 'a' 'z')@(range_char 'A' 'Z');
-								subtract range_all [' '; '\n'; '\t'; '\r'] ; subtract range_all (range_char '0' '9'); 
-								subtract range_all ('_'::(range_char '0' '9')@(range_char 'a' 'z')@(range_char 'A' 'Z')) ]
+let classes : char list list = [ [' '; '\n'; '\t'; '\r']; (* \s *) 
+								range_char '0' '9'; (* \d *)
+								'_'::(range_char '0' '9')@(range_char 'a' 'z')@(range_char 'A' 'Z'); (* \w *) 
+								subtract range_all [' '; '\n'; '\t'; '\r'] ; (* \S *)
+								subtract range_all (range_char '0' '9'); (* \D *)
+								subtract range_all ('_'::(range_char '0' '9')@(range_char 'a' 'z')@(range_char 'A' 'Z'))  (* \W *)
+								]
 let dot_all : char list = (subtract (char_range 0 255) ['\r'; '\n'])
+
 let search_char_class (c : char) : char list option =
 	let rec aux ch_l cl_l =
 		match ch_l, cl_l with 
@@ -127,7 +186,7 @@ let capture_regex_of_text (t : (char*int) list) : (char*int) cap_reg =
 	| (')', n)::q -> (concat_list [res; or_content; on_going], (')', n)::q)
 	| ('(', n)::q -> begin
 		match aux res Epsilon Epsilon q with 
-		| (reg1, (')', m)::q') -> begin  
+		| (reg1, (')', m)::q') -> begin
 									parentheses := (n,m)::!parentheses; 
 									nb_parentheses := !nb_parentheses + 1;
 									add_allowed_transitions_within_capture reg1 n allowed_transitions_within_capture;
@@ -203,15 +262,6 @@ let rec simplify_regex (reg : 'a reg) : 'a reg =
 		if a' = Epsilon then Epsilon else Repeat a'
 	| Epsilon -> Epsilon  
 
-let rec cartesian_product (a : 'a list ) (b : 'b list ) : ('a * 'b) list = 
-	match (a,b) with 
-		| ([], _) | (_, []) -> []
-		| (a::q, l) -> (List.map (fun x -> (a,x)) l)@(cartesian_product q l);;
-
-let conditional_union (a : 'a list ) (b : 'a list ) (cond : bool) : 'a list =
-	if cond then a@b else a
-
-
 let local_language_of_local ((l, p, s, f) : 'a local ) : 'a local_language =
 	 {l = l; p = p; s = s; f = f;} 
 
@@ -224,27 +274,16 @@ let automaton_without_numerotation (auto : ( ('a* int) option, 'a* int) automato
 	end_states = List.map get_id auto.end_states; 
 	transitions = List.map (fun (s1,(c,_),s2) -> (get_id s1, c, get_id s2)) auto.transitions}
 
-let rec remove_doublons (l : 'a list) : 'a list =
+let rec remove_duplicates (l : 'a list) : 'a list =
 	match l with
 		| [] -> []
-		| a::q -> if List.mem a q then remove_doublons q else a::(remove_doublons q)
-
-let remove_unnesserary_transitions l =
-	let l' = remove_doublons l in
-	let already_all_taken_transitions = List.fold_left (fun la (n,c,m) -> if c = None then (n,m)::la else la) [] l' in
-	let rec aux l2 =
-		match l2 with
-			| [] -> []
-			| (n,a,m)::q -> if a = None then (n,a,m)::(aux q) 
-							else if List.mem (n,m) already_all_taken_transitions then aux q
-							else (n,a,m)::(aux q)
-	in aux l'
+		| a::q -> if List.mem a q then remove_duplicates q else a::(remove_duplicates q)
 
 let automaton_without_jokers (auto : (int,'a list) automaton) : (int , 'a) automaton =
 	{ 
 	init_states = auto.init_states;
 	end_states = auto.end_states; 
-	transitions = remove_doublons (
+	transitions = remove_duplicates (
 			List.flatten (
 				List.map 
 					(fun (n,a,m) -> List.map ( fun c -> (n,c,m) ) a )
@@ -302,34 +341,17 @@ let determinised_transitions (auto : ('a, char) automaton) =
 				aux nstates (trs@transitions) ((List.filter (fun x -> not (List.mem x nstates)) (List.map (fun (_,s') -> s') trs))@q)
 	in aux [] [] [List.sort compare auto.init_states]
 
-let put_in_htbl ( tab : ('a*'b) list) : ('a , 'b) Hashtbl.t =
-	let ht = Hashtbl.create (List.length tab) in
-	let rec aux = function 
-		| [] -> ()
-		| (k,v)::q -> ( Hashtbl.add ht k v ; aux q)
-	in aux tab;
-	ht;;
-
-let rec do_intersect (l1 : 'a list) (l2 : 'a list) : 'a option =
-	match l1 with 
-		| [] -> None
-		| a::q -> if List.mem a l2 then Some a else do_intersect q l2
-
-let map_in_tbl (l : 'a list) (f : 'a -> 'b) : ('a, 'b) Hashtbl.t =
-	let ht = Hashtbl.create (List.length l) in 
-	let rec aux = function
-		| [] -> ()
-		| a::q -> (Hashtbl.add ht a (f a) ; aux q)
-	in aux l;
-	ht
-
 let determinised_automaton (auto: ('a, char) automaton) : 'a language_determinised_automaton =
 	let (states, new_transitions) = determinised_transitions auto in
-	let ending_info = map_in_tbl states (do_intersect auto.end_states) in 
+	let ending_info = map_in_tbl states (do_intersect_on auto.end_states) in 
 	{init_state = List.sort compare auto.init_states; ending_info = ending_info; delta_htbl = put_in_htbl new_transitions}
 
 let compile_regex (re_text : string) : regex_det_auto =
 	determinised_automaton (automaton_of_regex_text re_text)
+
+(*********************************************************************************************)
+(**************************** Running regex functions ****************************************)
+(*********************************************************************************************)
 
 let run_automaton_on (auto : 'a language_determinised_automaton) (word : string) : 'a list option =
 	let listed_word = char_list_of_string word in 
@@ -358,28 +380,6 @@ let get_execution_reversed (auto : 'a language_determinised_automaton) (listed_w
 	in run_from (Some auto.init_state) listed_word;
 	!states
 
-type compiled_capturer = {
-	captures_info : captures_infos;
-	determinised_auto : regex_det_auto; 
-	backwards_delta : ((char*int), int) Hashtbl.t
-}
-type compiled_recognizer = regex_det_auto
-
-let compile_capture_regex re_text =
-	let (auto, ps_info) = capture_automaton_of_regex_text re_text in 
-	let det_auto = determinised_automaton auto in
-	let back_delta = Hashtbl.create (List.length auto.transitions) in
-	let rec init_back_delta tr =
-		match tr with
-			| [] -> ()
-			| (q,a,q')::tr' -> (Hashtbl.add back_delta (a,q') q ;init_back_delta tr')
-	in init_back_delta auto.transitions;
-	{
-		captures_info = ps_info;
-		determinised_auto = det_auto; 
-		backwards_delta = back_delta
-	}
-
 let reverse_find_path_of_spath (reversed_super_path : 'a list list) (reversed_word : char list) (back_delta : (char* 'a, 'a) Hashtbl.t) (from : 'a) : 'a list =
 	let rec find_from (rev_super_path : 'a list list) (rev_w : char list) (start : 'a) = 
 		match rev_super_path, rev_w with
@@ -387,7 +387,7 @@ let reverse_find_path_of_spath (reversed_super_path : 'a list list) (reversed_wo
 			| [],_ | _,[] -> failwith "The size of the path should correspond to the size of the word !"
 			| sstate::rev_pth', a::rev_w' -> 
 			begin
-				match do_intersect (Hashtbl.find_all back_delta (a, start)) sstate with
+				match do_intersect_on (Hashtbl.find_all back_delta (a, start)) sstate with
 						| None -> failwith "Transitions in super path should be allowed by the presence of an antecedant to any element in the next super state."
 						| Some s -> start::(find_from rev_pth' rev_w' s)
 			end
@@ -425,6 +425,25 @@ let find_captures reversed_word reversed_path cap_info =
 			| a::rev_w', s::rev_pth' -> (add_to_captures a s prev_s; update_captures_from rev_w' rev_pth' s)
 	in update_captures_from reversed_word reversed_path (-1) ;
 	captures
+
+(*********************************************************************************************)
+(********************************* Public interface ******************************************)
+(*********************************************************************************************)
+
+let compile_capture_regex re_text =
+	let (auto, ps_info) = capture_automaton_of_regex_text re_text in 
+	let det_auto = determinised_automaton auto in
+	let back_delta = Hashtbl.create (List.length auto.transitions) in
+	let rec init_back_delta tr =
+		match tr with
+			| [] -> ()
+			| (q,a,q')::tr' -> (Hashtbl.add back_delta (a,q') q ;init_back_delta tr')
+	in init_back_delta auto.transitions;
+	{
+		captures_info = ps_info;
+		determinised_auto = det_auto; 
+		backwards_delta = back_delta
+	}
 
 let captured cap_re word = 
 	let listed_word = char_list_of_string word in
