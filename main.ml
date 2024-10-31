@@ -49,6 +49,10 @@ let rec do_intersect_on (l1 : 'a list) (l2 : 'a list) : 'a option =
 		| [] -> None
 		| a::q -> if List.mem a l2 then Some a else do_intersect_on q l2
 
+let rec remove_duplicates (l : 'a list) : 'a list =
+	match l with
+		| [] -> []
+		| a::q -> if List.mem a q then remove_duplicates q else a::(remove_duplicates q)
 
 (*********************************************************************************************)
 (********************************** Regex types  *********************************************)
@@ -274,11 +278,6 @@ let automaton_without_numerotation (auto : ( ('a* int) option, 'a* int) automato
 	end_states = List.map get_id auto.end_states; 
 	transitions = List.map (fun (s1,(c,_),s2) -> (get_id s1, c, get_id s2)) auto.transitions}
 
-let rec remove_duplicates (l : 'a list) : 'a list =
-	match l with
-		| [] -> []
-		| a::q -> if List.mem a q then remove_duplicates q else a::(remove_duplicates q)
-
 let automaton_without_jokers (auto : (int,'a list) automaton) : (int , 'a) automaton =
 	{ 
 	init_states = auto.init_states;
@@ -345,9 +344,6 @@ let determinised_automaton (auto: ('a, char) automaton) : 'a language_determinis
 	let (states, new_transitions) = determinised_transitions auto in
 	let ending_info = map_in_tbl states (do_intersect_on auto.end_states) in 
 	{init_state = List.sort compare auto.init_states; ending_info = ending_info; delta_htbl = put_in_htbl new_transitions}
-
-let compile_regex (re_text : string) : regex_det_auto =
-	determinised_automaton (automaton_of_regex_text re_text)
 
 (*********************************************************************************************)
 (**************************** Running regex functions ****************************************)
@@ -444,6 +440,9 @@ let compile_capture_regex re_text =
 		determinised_auto = det_auto; 
 		backwards_delta = back_delta
 	}
+
+let compile_regex (re_text : string) : regex_det_auto =
+	determinised_automaton (automaton_of_regex_text re_text)
 
 let captured cap_re word = 
 	let listed_word = char_list_of_string word in
