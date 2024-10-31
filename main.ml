@@ -196,6 +196,7 @@ let capture_regex_of_text (t : (char*int) list) : (char*int) cap_reg =
 		on_going : still open unfinished content accu 
 	 *)
 	let rec aux res or_content on_going = function
+	| ('\\', _)::('$', n)::[] -> aux res (Concat(or_content,on_going)) (Letters (['$'],n)) []
 	| ('$', _)::[] -> (concat_list [res; or_content; on_going], [])
 	| [] -> (concat_list [res; or_content; on_going; loop (-3)], [])
 	| (')', n)::q -> (concat_list [res; or_content; on_going], (')', n)::q)
