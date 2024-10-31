@@ -189,12 +189,15 @@ let capture_regex_of_text (t : (char*int) list) : (char*int) cap_reg =
 	let nb_parentheses = ref 0 in
 	let parentheses = ref [] in
 	let allowed_transitions_within_capture = Hashtbl.create 1 in
+	let loop id = Optional (Repeat (Letters (dot_all, id))) in 
 	(* 
 		res : closed and definitive content
 		or_content : last priority content (or is the operator with less priority)
 		on_going : still open unfinished content accu 
 	 *)
 	let rec aux res or_content on_going = function
+	| ('$', _)::[] -> (concat_list [res; or_content; on_going], [])
+	| [] -> (concat_list [res; or_content; on_going; loop (-3)], [])
 	| (')', n)::q -> (concat_list [res; or_content; on_going], (')', n)::q)
 	| ('(', n)::q -> begin
 		match aux res Epsilon Epsilon q with 
@@ -244,15 +247,22 @@ let capture_regex_of_text (t : (char*int) list) : (char*int) cap_reg =
 		else aux res (Concat(or_content,on_going)) (Letters ([ch],n)) q
 	| (ch,n)::q -> if ch = '\\' then failwith "Cannot end the string with backslash, backslash has to escape something !"
 	else aux res (Concat(or_content,on_going)) (Letters ([ch],n)) q
-	| [] -> (concat_list [res; or_content; on_going], [])
 	in 
-	match aux Epsilon Epsilon Epsilon t with 
-		| (reg, []) -> reg , {
+	let (t', begin_loop) = 
+		match t with
+			| ('^', _)::t2 -> (t2, false)
+			| ('\\',_)::('^', n)::t2 -> (('^', n)::t2, true)
+			| _ -> (t, true)
+	in 
+	match aux Epsilon Epsilon Epsilon t' with 
+		| (_ , (a,n)::_) -> failwith ("unexpected "^(String.make 1 a)^" at postion "^string_of_int n)
+		
+		| (reg, []) -> (if begin_loop then Concat (loop (-2) ,reg)  else reg ), 
+							{
 								nb_parentheses = !nb_parentheses;
 								parentheses = ( List.sort (fun (n1,m1) (n2,m2) -> n1 - n2) !parentheses);
 								allowed_transitions_within_capture = allowed_transitions_within_capture
 							} 
-		| (_ , (a,n)::_) -> failwith ("unexpected "^(String.make 1 a)^" at postion "^string_of_int n)
 	
 
 let rec simplify_regex (reg : 'a reg) : 'a reg =
@@ -280,7 +290,7 @@ let local_language_of_local ((l, p, s, f) : 'a local ) : 'a local_language =
 let automaton_without_numerotation (auto : ( ('a* int) option, 'a* int) automaton ) : (int, 'a) automaton  = 
 	let get_id : ('a*int) option -> int = function
 		| None -> -1
-		| Some (_,n) -> (assert (n >= 0); n)
+		| Some (_,n) -> (assert (n <> -1); n)
 	in 
 		{ init_states = List.map get_id auto.init_states; 
 	end_states = List.map get_id auto.end_states; 
