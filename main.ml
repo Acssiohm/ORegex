@@ -39,19 +39,13 @@ let conditional_union (a : 'a list ) (b : 'a list ) (cond : bool) : 'a list =
 (* Creates a hashtable with the (key, value) bindings in tab *)
 let put_in_htbl ( tab : ('a*'b) list) : ('a , 'b) Hashtbl.t =
 	let ht = Hashtbl.create (List.length tab) in
-	let rec aux = function 
-		| [] -> ()
-		| (k,v)::q -> ( Hashtbl.add ht k v ; aux q)
-	in aux tab;
-	ht;;
+	List.iter ( fun (k,v) -> Hashtbl.add ht k v) tab;
+	ht
 
 (* Creates a hashtable binding key and (f key) for key in the list l *)
 let map_in_tbl (l : 'a list) (f : 'a -> 'b) : ('a, 'b) Hashtbl.t =
 	let ht = Hashtbl.create (List.length l) in 
-	let rec aux = function
-		| [] -> ()
-		| a::q -> (Hashtbl.add ht a (f a) ; aux q)
-	in aux l;
+	List.iter (fun x -> Hashtbl.add ht x (f x) ) l;
 	ht
 
 (* Finds an element in common between l1 and l2 or returns None if there are none *)
@@ -102,8 +96,7 @@ type 'a local_language = {
 type 'a local = (bool) * ('a list) * ('a list) * ( ('a* 'a) list )
 
 type 'a reg = 
-	| Letter of 'a
-	| Joker of (char list )*int
+	| Letters of (char list )*int
 	| Or of 'a reg * 'a reg 
 	| Optional of 'a reg
 	| Repeat of 'a reg
@@ -166,7 +159,7 @@ let char_classes : (char * (char list)) list = List.combine char_classes_names c
 
 (* Returns the set of chars associated with char class named \c *)
 let search_char_class (c : char) : char list option =
-	List.assoc c char_classes
+	List.assoc_opt c char_classes
 
 let rec local_of_regex : ('a*int) reg -> ('a list * int) local = function  
 	| Concat(a,b) -> 
@@ -183,9 +176,7 @@ let rec local_of_regex : ('a*int) reg -> ('a list * int) local = function
 	| Repeat a -> 
 		let (la, pa, sa, fa) = local_of_regex a in 
 		(la, pa, sa, fa@(cartesian_product sa pa) )
-	| Letter (l,n) -> 
-		(false, [[l],n] , [[l],n] , [])
-	| Joker (cs,n) -> 
+	| Letters (cs,n) -> 
 		(false, [cs,n] , [cs,n] , [])
 	| Epsilon -> (false, [], [], [])
 
@@ -219,7 +210,7 @@ let capture_regex_of_text (t : (char*int) list) : (char*int) cap_reg =
 	| ('?', _)::q -> aux res or_content (Optional on_going) q
 	| ('+', _)::q -> aux res or_content (Repeat on_going) q
 	| ('*', _)::q -> aux res or_content (Optional (Repeat on_going)) q
-	| ('.', n)::q -> aux res (Concat(or_content,on_going)) (Joker (dot_all , n) ) q
+	| ('.', n)::q -> aux res (Concat(or_content,on_going)) (Letters (dot_all , n) ) q
 	| ('[', n)::q -> let rec get_inside_brackets l =
 						match l with 
 							| [] -> failwith ("bracket [ at postion "^(string_of_int n)^" not closed")
@@ -244,15 +235,15 @@ let capture_regex_of_text (t : (char*int) list) : (char*int) cap_reg =
 						in 
 						let ( l , q') = get_inside_brackets q in 
 						let cs = get_char_set l in 
-						aux res (Concat(or_content,on_going)) (Joker (cs , n) ) q'
+						aux res (Concat(or_content,on_going)) (Letters (cs , n) ) q'
 	| ('\\', _)::(ch,n)::q -> 
 		if not (List.mem ch special_chars) then
 		match search_char_class ch with
 			| None -> failwith ("Cannot escape non special character : '"^(String.make 1 ch)^"' at position "^(string_of_int n) )
-			| Some cl -> aux res (Concat(or_content,on_going)) (Joker (cl , n) ) q
-		else aux res (Concat(or_content,on_going)) (Letter (ch,n)) q
+			| Some cl -> aux res (Concat(or_content,on_going)) (Letters (cl , n) ) q
+		else aux res (Concat(or_content,on_going)) (Letters ([ch],n)) q
 	| (ch,n)::q -> if ch = '\\' then failwith "Cannot end the string with backslash, backslash has to escape something !"
-	else aux res (Concat(or_content,on_going)) (Letter (ch,n)) q
+	else aux res (Concat(or_content,on_going)) (Letters ([ch],n)) q
 	| [] -> (concat_list [res; or_content; on_going], [])
 	in 
 	match aux Epsilon Epsilon Epsilon t with 
@@ -266,7 +257,7 @@ let capture_regex_of_text (t : (char*int) list) : (char*int) cap_reg =
 
 let rec simplify_regex (reg : 'a reg) : 'a reg =
 	match reg with 
-	| Letter _ | Joker _ -> reg 
+	| Letters _ -> reg 
 	| Or (a,b) -> begin
 		let (a',b') = (simplify_regex a, simplify_regex b) in 
 		if a' = Epsilon then b' else if b' = Epsilon then a' else Or(a', b')
@@ -295,7 +286,7 @@ let automaton_without_numerotation (auto : ( ('a* int) option, 'a* int) automato
 	end_states = List.map get_id auto.end_states; 
 	transitions = List.map (fun (s1,(c,_),s2) -> (get_id s1, c, get_id s2)) auto.transitions}
 
-let automaton_without_jokers (auto : (int,'a list) automaton) : (int , 'a) automaton =
+let automaton_flattened_letters (auto : (int,'a list) automaton) : (int , 'a) automaton =
 	{ 
 	init_states = auto.init_states;
 	end_states = auto.end_states; 
@@ -315,7 +306,7 @@ let capture_automaton_of_regex_text txt =
 			char_list_of_string txt
 		)
 	) in  
-	automaton_without_jokers (
+	automaton_flattened_letters (
 		automaton_without_numerotation (
 			automaton_of_local_language (
 				local_language_of_local (
