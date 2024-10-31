@@ -418,19 +418,22 @@ let find_accepting_path_reversed (det_auto) (back_delta) (word : char list) (rev
 		end
 
 let find_captures reversed_word reversed_path cap_info =
-	let captures = Array.make cap_info.nb_parentheses [] in
+	let captures = Array.make (cap_info.nb_parentheses + 1) [] in
 	let ht = cap_info.allowed_transitions_within_capture in 
+	let global_capture = ref "" in
 	let add_to_captures (a : char ) (s : int) (prev_s : int) =
 		let rec aux (parentheses : (int*int) list ) (i : int)  = 
-			match parentheses with
+			if i = 0 then 
+				(if s >= 0 then global_capture :=  (String.make 1 a)^(!global_capture); aux parentheses (i+1) )
+			else match parentheses with
 				| [] -> ()
-				| (n,m)::ps' ->
+				| (n,m)::ps' -> 
 				(match Hashtbl.find_opt ht (n, s, prev_s) with
 						| None -> if n <= s && s <= m then captures.(i) <- (String.make 1 a)::captures.(i)
 						| Some true -> (match captures.(i) with
 											| accu::q -> captures.(i) <- ((String.make 1 a)^accu)::q
 											| [] -> failwith "pas possible") 
-						| _ -> failwith "pas possible"); aux ps' (i+1)
+						| _ -> failwith "pas possible"); 
 		in aux cap_info.parentheses 0
 	in
 	let rec update_captures_from rev_w rev_pth prev_s =
@@ -439,6 +442,7 @@ let find_captures reversed_word reversed_path cap_info =
 			| [], _ | _, [] -> failwith "The word and the path should have same length. Did you forget to remove the initial state ?"
 			| a::rev_w', s::rev_pth' -> (add_to_captures a s prev_s; update_captures_from rev_w' rev_pth' s)
 	in update_captures_from reversed_word reversed_path (-1) ;
+	captures.(0) <- [!global_capture];
 	captures
 
 (*********************************************************************************************)
