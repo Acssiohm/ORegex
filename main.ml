@@ -85,7 +85,7 @@ let char_classes : char list = ['s';'d';'w';'S';'D';'W']
 let classes : char list list = [ [' '; '\n'; '\t'; '\r']; range_char '0' '9';'_'::(range_char '0' '9')@(range_char 'a' 'z')@(range_char 'A' 'Z');
 								subtract range_all [' '; '\n'; '\t'; '\r'] ; subtract range_all (range_char '0' '9'); 
 								subtract range_all ('_'::(range_char '0' '9')@(range_char 'a' 'z')@(range_char 'A' 'Z')) ]
-
+let dot_all : char list = (subtract (char_range 0 255) ['\r'; '\n'])
 let search_char_class (c : char) : char list option =
 	let rec aux ch_l cl_l =
 		match ch_l, cl_l with 
@@ -119,7 +119,7 @@ let rec add_allowed_transitions_within_capture ( re : (char*int) reg ) ( n : int
 	let (_, _ , _, transitions ) = local_of_regex re in
 	List.iter (fun ((_,s1),(_,s2)) -> Hashtbl.add ht (n, s1, s2) true ) transitions
 
-let capture_regex_of_text (t : (char*int) list) : (char*int) cap_reg   =
+let capture_regex_of_text (t : (char*int) list) : (char*int) cap_reg =
 	let nb_parentheses = ref 0 in
 	let parentheses = ref [] in
 	let allowed_transitions_within_capture = Hashtbl.create 1 in
@@ -139,7 +139,7 @@ let capture_regex_of_text (t : (char*int) list) : (char*int) cap_reg   =
 	| ('?', _)::q -> aux res or_content (Optional on_going) q
 	| ('+', _)::q -> aux res or_content (Repeat on_going) q
 	| ('*', _)::q -> aux res or_content (Optional (Repeat on_going)) q
-	| ('.', n)::q -> aux res (Concat(or_content,on_going)) (Joker ((subtract (char_range 0 255) ['\r'; '\n']) , n) ) q
+	| ('.', n)::q -> aux res (Concat(or_content,on_going)) (Joker (dot_all , n) ) q
 	| ('[', n)::q -> let rec get_inside_brackets l =
 						match l with 
 							| [] -> failwith ("bracket [ at postion "^(string_of_int n)^" not closed")
@@ -346,7 +346,7 @@ let accessible_end_state (auto :('a, 'c) language_determinist_automaton) (word:s
 		| None -> None 
 		| Some final_state -> Hashtbl.find auto.ending_info final_state
 
-let run_capture_automaton_on (auto : 'a language_determinised_automaton) (listed_word : char list) : (('a list) * ('a list list)) option =
+let get_execution_reversed (auto : 'a language_determinised_automaton) (listed_word : char list) : 'a list list =
 	let states = ref [] in 
 	let rec run_from s_opt w =
 		match s_opt with
@@ -356,9 +356,7 @@ let run_capture_automaton_on (auto : 'a language_determinised_automaton) (listed
 					| [] -> ()
 					| l::w' ->  run_from (Hashtbl.find_opt auto.delta_htbl (s,l)) w'
 	in run_from (Some auto.init_state) listed_word;
-	match !states with
-		| [] -> None
-		| final_state::q -> Some (final_state, q)
+	!states
 
 type compiled_capturer = {
 	captures_info : captures_infos;
@@ -382,46 +380,58 @@ let compile_capture_regex re_text =
 		backwards_delta = back_delta
 	}
 
+let reverse_find_path_of_spath (reversed_super_path : 'a list list) (reversed_word : char list) (back_delta : (char* 'a, 'a) Hashtbl.t) (from : 'a) : 'a list =
+	let rec find_from (rev_super_path : 'a list list) (rev_w : char list) (start : 'a) = 
+		match rev_super_path, rev_w with
+			| [],[] -> [] (* le dernier élément ignoré, c'est toujours l'état initial i.e. -1*)
+			| [],_ | _,[] -> failwith "The size of the path should correspond to the size of the word !"
+			| sstate::rev_pth', a::rev_w' -> 
+			begin
+				match do_intersect (Hashtbl.find_all back_delta (a, start)) sstate with
+						| None -> failwith "Transitions in super path should be allowed by the presence of an antecedant to any element in the next super state."
+						| Some s -> start::(find_from rev_pth' rev_w' s)
+			end
+	in find_from reversed_super_path reversed_word from
+
+let find_accepting_path_reversed (det_auto) (back_delta) (word : char list) (rev_word : char list) =
+	match get_execution_reversed det_auto word with
+		| [] -> None
+		| finish_super_state::reversed_super_path  -> begin
+			match (Hashtbl.find det_auto.ending_info finish_super_state) with
+				| None -> None
+				| Some final_state -> Some (reverse_find_path_of_spath reversed_super_path rev_word back_delta final_state)
+		end
+
+let find_captures reversed_word reversed_path cap_info =
+	let captures = Array.make cap_info.nb_parentheses [] in
+	let ht = cap_info.allowed_transitions_within_capture in 
+	let add_to_captures (a : char ) (s : int) (prev_s : int) =
+		let rec aux (parentheses : (int*int) list ) (i : int)  = 
+			match parentheses with
+				| [] -> ()
+				| (n,m)::ps' ->
+				(match Hashtbl.find_opt ht (n, s, prev_s) with
+						| None -> if n <= s && s <= m then captures.(i) <- (String.make 1 a)::captures.(i)
+						| Some true -> (match captures.(i) with
+											| accu::q -> captures.(i) <- ((String.make 1 a)^accu)::q
+											| [] -> failwith "pas possible") 
+						| _ -> failwith "pas possible"); aux ps' (i+1)
+		in aux cap_info.parentheses 0
+	in
+	let rec update_captures_from rev_w rev_pth prev_s =
+		match rev_w, rev_pth with
+			| [], [] -> ()
+			| [], _ | _, [] -> failwith "The word and the path should have same length. Did you forget to remove the initial state ?"
+			| a::rev_w', s::rev_pth' -> (add_to_captures a s prev_s; update_captures_from rev_w' rev_pth' s)
+	in update_captures_from reversed_word reversed_path (-1) ;
+	captures
+
 let captured cap_re word = 
-	let captures = Array.make cap_re.captures_info.nb_parentheses [] in
 	let listed_word = char_list_of_string word in
-	let ht = cap_re.captures_info.allowed_transitions_within_capture in 
-	match run_capture_automaton_on cap_re.determinised_auto listed_word with 
+	let reversed_word = List.rev listed_word in
+	match find_accepting_path_reversed cap_re.determinised_auto cap_re.backwards_delta listed_word reversed_word with
 		| None -> None
-		| Some (final_det_state, q ) ->
-	match (Hashtbl.find cap_re.determinised_auto.ending_info final_det_state) with
-		| None -> None
-		| Some final_state -> 
-		let rec find_path (l : int list list) (w : char list) (elem : int) :int list =
-			match l,  w with
-				| [],[] -> [] (* le dernier élément elem est ignoré, c'est toujours l'état initial i.e. -1*)
-				| [],_ | _,[] -> failwith "pas possible car |w| = |l|"
-				| sl::q', a::w' -> match do_intersect (Hashtbl.find_all cap_re.backwards_delta (a, elem)) sl with
-									| None -> failwith "pas possible par construction de l'automate déterminisé"
-									| Some s -> elem::(find_path q' w' s)
-		in let reversed_word = List.rev listed_word in
-		let rev_path = find_path q reversed_word final_state in
-		let rec write_captures rev_w rev_pth prev_s =
-			match rev_w, rev_pth with
-				| [], [] -> ()
-				| [], _ | _, [] -> failwith "pas possible"
-				| a::rev_w', s::rev_pth' -> 
-					(let rec add_to_captures p i =
-						match p with
-							| [] -> ()
-							| (n,m)::ps' -> (
-										(match Hashtbl.find_opt ht (n, s, prev_s) with
-											| None -> if n <= s && s <= m then captures.(i) <- (String.make 1 a)::captures.(i)
-											| Some true -> (match captures.(i) with
-																| accu::q -> captures.(i) <- (( String.make 1 a )^accu)::q
-																| [] -> failwith "pas possible") 
-											| _ -> failwith "pas possible");
-										add_to_captures ps' (i+1) 
-										)
-					in add_to_captures cap_re.captures_info.parentheses 0;
-				write_captures rev_w' rev_pth' s)
-		in write_captures reversed_word rev_path (-1); (*-1 peut être remplacé par n'importe quelle valeur négative*)
-		Some captures
+		| Some rev_path -> Some (find_captures reversed_word rev_path cap_re.captures_info)
 
 let recognizer_of_capturer cap_re =
 	cap_re.determinised_auto
