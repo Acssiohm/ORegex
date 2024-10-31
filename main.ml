@@ -2,32 +2,41 @@
 (************************** General purpose functions ****************************************)
 (*********************************************************************************************)
 
+(* Converts the string s into a list of its characters *)
 let char_list_of_string s = List.init (String.length s) (String.get s);;
 
+(* Concatenates a list of characters into a string *)
 let rec string_of_char_list = function
 	| [] -> ""
 	| c::q -> (String.make 1 c)^(string_of_char_list q)
 
+(* Create a range of numbers, so the returned list contains the whole numbers between i and j (both included) *)
 let rec range (i:int) (j:int) : int list =
 	if i <= j then i::(range (i+1) j) else []
 
+(* Returns a list containing the charachters with ascii codes between i and j (both included) *)
 let char_range (i:int) (j:int) : char list =
 	List.map Char.chr (range i j)
 
+(* Returns list of the charachters wich are between c1 and c2 (both included) in the ascii table *)
 let range_char (c1:char)(c2:char) : char list =
 	char_range (Char.code c1) (Char.code c2)
 
+(* Like the set difference : returns l1 without the elements that are in l2 *)
 let subtract (l1 : 'a list) (l2 : 'a list) : 'a list =
 	List.filter (fun x -> not (List.mem x l2)) l1
 
+(* Returns a list of all couples (u,v) such that u is in a and v is in b *)
 let rec cartesian_product (a : 'a list ) (b : 'b list ) : ('a * 'b) list = 
 	match (a,b) with 
 		| ([], _) | (_, []) -> []
 		| (a::q, l) -> (List.map (fun x -> (a,x)) l)@(cartesian_product q l);;
 
+(* Returns a list containing the elements of a and if cond is true those of b  *)
 let conditional_union (a : 'a list ) (b : 'a list ) (cond : bool) : 'a list =
 	if cond then a@b else a
 
+(* Creates a hashtable with the (key, value) bindings in tab *)
 let put_in_htbl ( tab : ('a*'b) list) : ('a , 'b) Hashtbl.t =
 	let ht = Hashtbl.create (List.length tab) in
 	let rec aux = function 
@@ -36,6 +45,7 @@ let put_in_htbl ( tab : ('a*'b) list) : ('a , 'b) Hashtbl.t =
 	in aux tab;
 	ht;;
 
+(* Creates a hashtable binding key and (f key) for key in the list l *)
 let map_in_tbl (l : 'a list) (f : 'a -> 'b) : ('a, 'b) Hashtbl.t =
 	let ht = Hashtbl.create (List.length l) in 
 	let rec aux = function
@@ -44,11 +54,13 @@ let map_in_tbl (l : 'a list) (f : 'a -> 'b) : ('a, 'b) Hashtbl.t =
 	in aux l;
 	ht
 
+(* Finds an element in common between l1 and l2 or returns None if there are none *)
 let rec do_intersect_on (l1 : 'a list) (l2 : 'a list) : 'a option =
 	match l1 with 
 		| [] -> None
 		| a::q -> if List.mem a l2 then Some a else do_intersect_on q l2
 
+(* Returns a list containing the elements of l without repetition *)
 let rec remove_duplicates (l : 'a list) : 'a list =
 	match l with
 		| [] -> []
@@ -133,29 +145,28 @@ let automaton_of_local_language (loc : 'a local_language) : ('a option, 'a) auto
 		List.map (fun (a,b,c) -> (Some a, b, Some c)) (transitions_two_factors loc.f)
 	}
 
+(* Creates the regex concatenating all the regex of a list in order *)
 let rec concat_list : ('a reg) list -> 'a reg  = function
 	| [] -> Epsilon
 	| a::q -> Concat (a, (concat_list q))
 
+(* Some usefull sets of characters *)
 let range_all : char list = char_range 0 255
+let dot_all : char list = (subtract range_all ['\r'; '\n'])
 let special_chars : char list = ['('; ')'; '|'; '?';'+';'*';'\\';'.']
-let char_classes : char list = ['s';'d';'w';'S';'D';'W']
-let classes : char list list = [ [' '; '\n'; '\t'; '\r']; (* \s *) 
+let char_classes_names : char list = ['s';'d';'w';'S';'D';'W']
+let char_classes_values : char list list = [ [' '; '\n'; '\t'; '\r']; (* \s *) 
 								range_char '0' '9'; (* \d *)
 								'_'::(range_char '0' '9')@(range_char 'a' 'z')@(range_char 'A' 'Z'); (* \w *) 
 								subtract range_all [' '; '\n'; '\t'; '\r'] ; (* \S *)
 								subtract range_all (range_char '0' '9'); (* \D *)
 								subtract range_all ('_'::(range_char '0' '9')@(range_char 'a' 'z')@(range_char 'A' 'Z'))  (* \W *)
 								]
-let dot_all : char list = (subtract (char_range 0 255) ['\r'; '\n'])
+let char_classes : (char * (char list)) list = List.combine char_classes_names char_classes_values
 
+(* Returns the set of chars associated with char class named \c *)
 let search_char_class (c : char) : char list option =
-	let rec aux ch_l cl_l =
-		match ch_l, cl_l with 
-			| [],[] -> None
-			| [], _ | _, [] -> failwith "Erreur : les listes char_classes et classes ne sont pas de la même taille : à jour ?"
-			| ch::ch_l' , cl::cl_l' -> if ch = c then Some cl else aux ch_l' cl_l'
-	in aux char_classes classes
+	List.assoc c char_classes
 
 let rec local_of_regex : ('a*int) reg -> ('a list * int) local = function  
 	| Concat(a,b) -> 
@@ -182,10 +193,16 @@ let rec add_allowed_transitions_within_capture ( re : (char*int) reg ) ( n : int
 	let (_, _ , _, transitions ) = local_of_regex re in
 	List.iter (fun ((_,s1),(_,s2)) -> Hashtbl.add ht (n, s1, s2) true ) transitions
 
+(* Main conversion function *)
 let capture_regex_of_text (t : (char*int) list) : (char*int) cap_reg =
 	let nb_parentheses = ref 0 in
 	let parentheses = ref [] in
 	let allowed_transitions_within_capture = Hashtbl.create 1 in
+	(* 
+		res : closed and definitive content
+		or_content : last priority content (or is the operator with less priority)
+		on_going : still open unfinished content accu 
+	 *)
 	let rec aux res or_content on_going = function
 	| (')', n)::q -> (concat_list [res; or_content; on_going], (')', n)::q)
 	| ('(', n)::q -> begin
