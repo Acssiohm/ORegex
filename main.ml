@@ -180,6 +180,34 @@ let rec add_allowed_transitions_within_capture ( re : reg ) ( n : int) ( ht : (i
 	let (_, _ , _, transitions ) = local_of_regex re in
 	List.iter (fun ((_,s1),(_,s2)) -> Hashtbl.add ht (n, s1, s2) true ) transitions
 
+let rec get_inside_brackets l n =
+	match l with 
+		| [] -> failwith ("bracket [ at postion "^(string_of_int n)^" not closed")
+		| ('\\', _)::[] -> failwith ("bracket [ at postion "^(string_of_int n)^" not closed and string ended with backslash")
+		| ('\\', _)::(c , m)::q -> if List.mem c ['[';']';'-'] 
+									then let (s,q2) = get_inside_brackets q n in ((Some c,m)::s, q2)
+									else failwith ("Connot escape inside square brackets : "^(String.make 1 c)^" at position "^(string_of_int n)^" ( only [,],- can ) ")
+		| ('-', m)::q -> let (s,q2) = get_inside_brackets q n in ((None,m)::s, q2)
+		| ('[', m)::q -> failwith ("In brackets : cannot open '[' a second time at position "^(string_of_int m)^" ( already opened at position : "^(string_of_int n)^").\n Did you forget to escape it or to close the previous one ?")
+		| (']', _)::q -> ([], q)
+		| (c,m)::q -> let (s,q2) = get_inside_brackets q n in ((Some c,m)::s, q2)
+
+let rec get_char_set l = 
+	match l with 
+		| [] -> []
+		| (Some c1,_)::(None,m)::(Some c2,_)::q -> let r = (range_char c1 c2) in begin 
+			(if r = [] then print_string ("Warning : "^(String.make 1 c1)^" and "^(String.make 1 c2)^" around position "^(string_of_int m)^" are at reverse order so they are useless !\n" ) else () );
+			r@(get_char_set q)
+		end
+		| (None, m)::q -> failwith ("In brackets : the '-' at postion "^(string_of_int m)^" should be associated with two neighours, you can't begin with '-' nor have 'a-b-c'")
+		| (Some c,_)::q ->  c::(get_char_set q) 
+
+let parse_inside_brackets q n =
+	let ( l , q') = get_inside_brackets q n in 
+	let cs = get_char_set l in
+	(cs, q')
+
+
 (* Main conversion function *)
 let capture_regex_of_text (t : (char*int) list) : cap_reg =
 	let nb_parentheses = ref 0 in
@@ -205,36 +233,17 @@ let capture_regex_of_text (t : (char*int) list) : cap_reg =
 									aux res (Concat(or_content,on_going)) reg1 q' 
 								end
 		| _ -> failwith ("Parentheses at position "^string_of_int n ^ " is not closed ")
-	end
+		end
 	| ('|', _)::q -> let (reg1, q') = aux Epsilon Epsilon Epsilon q in aux res (Or(Concat(or_content,on_going),reg1)) Epsilon q'
 	| ('?', _)::q -> aux res or_content (Optional on_going) q
 	| ('+', _)::q -> aux res or_content (Repeat on_going) q
 	| ('*', _)::q -> aux res or_content (Optional (Repeat on_going)) q
 	| ('.', n)::q -> aux res (Concat(or_content,on_going)) (Letters (dot_all , n) ) q
-	| ('[', n)::q -> let rec get_inside_brackets l =
-						match l with 
-							| [] -> failwith ("bracket [ at postion "^(string_of_int n)^" not closed")
-							| ('\\', _)::[] -> failwith ("bracket [ at postion "^(string_of_int n)^" not closed and string ended with backslash")
-							| ('\\', _)::(c , m)::q -> if List.mem c ['[';']';'-'] 
-														then let (s,q2) = get_inside_brackets q in ((Some c,m)::s, q2)
-														else failwith ("Connot escape inside square brackets : "^(String.make 1 c)^" at position "^(string_of_int n)^" ( only [,],- can ) ")
-							| ('-', m)::q -> let (s,q2) = get_inside_brackets q in ((None,m)::s, q2)
-							| ('[', m)::q -> failwith ("In brackets : cannot open '[' a second time at position "^(string_of_int m)^" ( already opened at position : "^(string_of_int n)^").\n Did you forget to escape it or to close the previous one ?")
-							| (']', _)::q -> ([], q)
-							| (c,m)::q -> let (s,q2) = get_inside_brackets q in ((Some c,m)::s, q2)
-						in 
-						let rec get_char_set l = 
-							match l with 
-								| [] -> []
-								| (Some c1,_)::(None,m)::(Some c2,_)::q -> let r = (range_char c1 c2) in begin 
-									(if r = [] then print_string ("Warning : "^(String.make 1 c1)^" and "^(String.make 1 c2)^" around position "^(string_of_int m)^" are at reverse order so they are useless !\n" ) else () );
-									r@(get_char_set q)
-								end
-								| (None, m)::q -> failwith ("In brackets : the '-' at postion "^(string_of_int m)^" should be associated with two neighours, you can't begin with '-' nor have 'a-b-c'")
-								| (Some c,_)::q ->  c::(get_char_set q)
-						in 
-						let ( l , q') = get_inside_brackets q in 
-						let cs = get_char_set l in 
+	| ('[', n)::('\\',_)::('^',_)::q -> let (cs, q') = parse_inside_brackets q n in 
+						aux res (Concat(or_content,on_going)) (Letters ('^'::cs , n) ) q'
+	| ('[', n)::('^', _)::q -> let (cs, q') = parse_inside_brackets q n in 
+						aux res (Concat(or_content,on_going)) (Letters (subtract range_all cs , n) ) q'
+	| ('[', n)::q -> let (cs, q') = parse_inside_brackets q n in 
 						aux res (Concat(or_content,on_going)) (Letters (cs , n) ) q'
 	| ('\\', _)::(ch,n)::q -> 
 		if not (List.mem ch special_chars) then
@@ -244,16 +253,13 @@ let capture_regex_of_text (t : (char*int) list) : cap_reg =
 		else aux res (Concat(or_content,on_going)) (Letters ([ch],n)) q
 	| (ch,n)::q -> if ch = '\\' then failwith "Cannot end the string with backslash, backslash has to escape something !"
 	else aux res (Concat(or_content,on_going)) (Letters ([ch],n)) q
-	in 
-	let (t', begin_loop) = 
+	in let (t', begin_loop) = 
 		match t with
 			| ('^', _)::t2 -> (t2, false)
 			| ('\\',_)::('^', n)::t2 -> (('^', n)::t2, true)
 			| _ -> (t, true)
-	in 
-	match aux Epsilon Epsilon Epsilon t' with 
+	in match aux Epsilon Epsilon Epsilon t' with 
 		| (_ , (a,n)::_) -> failwith ("unexpected "^(String.make 1 a)^" at postion "^string_of_int n)
-		
 		| (reg, []) -> (if begin_loop then Concat (loop (-2) ,reg)  else reg ), 
 							{
 								nb_parentheses = !nb_parentheses;
