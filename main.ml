@@ -184,9 +184,13 @@ let rec get_inside_brackets l n =
 	match l with 
 		| [] -> failwith ("bracket [ at postion "^(string_of_int n)^" not closed")
 		| ('\\', _)::[] -> failwith ("bracket [ at postion "^(string_of_int n)^" not closed and string ended with backslash")
-		| ('\\', _)::(c , m)::q -> if List.mem c ['[';']';'-'] 
-									then let (s,q2) = get_inside_brackets q n in ((Some c,m)::s, q2)
-									else failwith ("Connot escape inside square brackets : "^(String.make 1 c)^" at position "^(string_of_int n)^" ( only [,],- can ) ")
+		| ('\\', _)::(c , m)::q -> if c = 'b' || c = 'B' then failwith "\\b and \\B are not supported " 
+						else begin 
+						let (s,q2) = get_inside_brackets q n in 
+						match search_char_class c with
+							| None -> ((Some c,m)::s, q2)
+							| Some cl -> ( (List.map (fun ch -> (Some ch,m)) cl)@s ,q2 )
+						end
 		| ('-', m)::q -> let (s,q2) = get_inside_brackets q n in ((None,m)::s, q2)
 		| ('[', m)::q -> failwith ("In brackets : cannot open '[' a second time at position "^(string_of_int m)^" ( already opened at position : "^(string_of_int n)^").\n Did you forget to escape it or to close the previous one ?")
 		| (']', _)::q -> ([], q)
@@ -220,7 +224,6 @@ let capture_regex_of_text (t : (char*int) list) : cap_reg =
 		on_going : first priority content that will take *,+..etc. like a single letter or parentheses
 	 *)
 	let rec aux res or_content on_going = function
-	| ('\\', _)::('$', n)::[] -> aux res (Concat(or_content,on_going)) (Letters (['$'],n)) []
 	| ('$', _)::[] -> (concat_list [res; or_content; on_going], [])
 	| [] -> (concat_list [res; or_content; on_going; loop (-3)], [])
 	| (')', n)::q -> (concat_list [res; or_content; on_going], (')', n)::q)
@@ -239,18 +242,15 @@ let capture_regex_of_text (t : (char*int) list) : cap_reg =
 	| ('+', _)::q -> aux res or_content (Repeat on_going) q
 	| ('*', _)::q -> aux res or_content (Optional (Repeat on_going)) q
 	| ('.', n)::q -> aux res (Concat(or_content,on_going)) (Letters (dot_all , n) ) q
-	| ('[', n)::('\\',_)::('^',_)::q -> let (cs, q') = parse_inside_brackets q n in 
-						aux res (Concat(or_content,on_going)) (Letters ('^'::cs , n) ) q'
 	| ('[', n)::('^', _)::q -> let (cs, q') = parse_inside_brackets q n in 
 						aux res (Concat(or_content,on_going)) (Letters (subtract range_all cs , n) ) q'
 	| ('[', n)::q -> let (cs, q') = parse_inside_brackets q n in 
 						aux res (Concat(or_content,on_going)) (Letters (cs , n) ) q'
 	| ('\\', _)::(ch,n)::q -> 
-		if not (List.mem ch special_chars) then
-		match search_char_class ch with
-			| None -> failwith ("Cannot escape non special character : '"^(String.make 1 ch)^"' at position "^(string_of_int n) )
-			| Some cl -> aux res (Concat(or_content,on_going)) (Letters (cl , n) ) q
-		else aux res (Concat(or_content,on_going)) (Letters ([ch],n)) q
+		if ch = 'b' || ch = 'B' then failwith "\\b and \\B are not supported " 
+		else begin match search_char_class ch with
+			| None -> aux res (Concat(or_content,on_going)) (Letters ([ch],n)) q
+			| Some cl -> aux res (Concat(or_content,on_going)) (Letters (cl , n) ) q end
 	| (ch,n)::q -> if ch = '\\' then failwith "Cannot end the string with backslash, backslash has to escape something !"
 	else aux res (Concat(or_content,on_going)) (Letters ([ch],n)) q
 	in let (t', begin_loop) = 
