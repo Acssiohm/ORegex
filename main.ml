@@ -34,7 +34,7 @@ let rec cartesian_product (a : 'a list ) (b : 'b list ) : ('a * 'b) list =
 
 (* Returns a list containing the elements of a and if cond is true those of b  *)
 let conditional_union (a : 'a list ) (b : 'a list ) (cond : bool) : 'a list =
-	if cond then a@b else a
+	if cond then b@a else a
 
 (* Creates a hashtable with the (key, value) bindings in tab *)
 let put_in_htbl ( tab : ('a*'b) list) : ('a , 'b) Hashtbl.t =
@@ -95,15 +95,15 @@ type 'a local_language = {
 
 type 'a local = (bool) * ('a list) * ('a list) * ( ('a* 'a) list )
 
-type 'a reg = 
-	| Letters of (char list )*int
-	| Or of 'a reg * 'a reg 
-	| Optional of 'a reg
-	| Repeat of 'a reg
-	| Concat of 'a reg * 'a reg
+type reg = 
+	| Letters of (char list*int)
+	| Or of reg * reg 
+	| Optional of reg
+	| Repeat of reg
+	| Concat of reg * reg
 	| Epsilon
 
-type 'a cap_reg = ('a reg) * captures_infos
+type cap_reg = reg * captures_infos
 type state = char*int;;
 
 type compiled_capturer = {
@@ -125,21 +125,17 @@ let linearise (regex : 'a list ) : ('a*int) list =
 	in
 	aux 0 regex
 
-let rec transitions_two_factors (f : ('a* 'a) list ) : ('a* 'a* 'a) list = match f with  
-	| [] -> []
-	| (a1, a2)::q -> (a1, a2, a2)::(transitions_two_factors q)
-
 let automaton_of_local_language (loc : 'a local_language) : ('a option, 'a) automaton =
 	let end_states = List.map (fun x -> Some x) loc.s in  
 	{
 		init_states = [None]; 
 		end_states = if loc.l then None::end_states else end_states; 
-		transitions = (List.map (fun x-> (None, x, Some x)) loc.p) @
-		List.map (fun (a,b,c) -> (Some a, b, Some c)) (transitions_two_factors loc.f)
+		transitions = (List.map (fun x -> (None, x, Some x)) loc.p) @
+		List.map (fun (a, b) -> (Some a, b, Some b)) loc.f
 	}
 
 (* Creates the regex concatenating all the regex of a list in order *)
-let rec concat_list : ('a reg) list -> 'a reg  = function
+let rec concat_list : reg list -> reg  = function
 	| [] -> Epsilon
 	| a::q -> Concat (a, (concat_list q))
 
@@ -161,31 +157,31 @@ let char_classes : (char * (char list)) list = List.combine char_classes_names c
 let search_char_class (c : char) : char list option =
 	List.assoc_opt c char_classes
 
-let rec local_of_regex : ('a*int) reg -> ('a list * int) local = function  
+let rec local_of_regex : reg -> ('a list * int) local = function  
 	| Concat(a,b) -> 
 		let (la, pa, sa, fa) = local_of_regex a in 
 		let (lb, pb, sb, fb) = local_of_regex b in
-		(la && lb, conditional_union pa pb la, conditional_union sb sa lb , fa@fb@(cartesian_product sa pb) ) 
+		(la && lb, conditional_union pa pb la, conditional_union sb sa lb , (cartesian_product sa pb)@fa@fb ) 
 	| Or(a,b) -> 
 		let (la, pa, sa, fa) = local_of_regex a in 
 		let (lb, pb, sb, fb) = local_of_regex b in
-		(la || lb, pa@pb, sb@sa, fa@fb )
+		(la || lb, pa@pb, sa@sb, fa@fb )
 	| Optional a -> 
 		let (la, pa, sa, fa) = local_of_regex a in 
 		(true, pa, sa, fa )
 	| Repeat a -> 
 		let (la, pa, sa, fa) = local_of_regex a in 
-		(la, pa, sa, fa@(cartesian_product sa pa) )
-	| Letters (cs,n) -> 
-		(false, [cs,n] , [cs,n] , [])
+		(la, pa, sa, (cartesian_product sa pa)@fa )
+	| Letters ls -> 
+		(false, [ls] , [ls] , [])
 	| Epsilon -> (false, [], [], [])
 
-let rec add_allowed_transitions_within_capture ( re : (char*int) reg ) ( n : int) ( ht : (int*int*int, bool) Hashtbl.t ) =
+let rec add_allowed_transitions_within_capture ( re : reg ) ( n : int) ( ht : (int*int*int, bool) Hashtbl.t ) =
 	let (_, _ , _, transitions ) = local_of_regex re in
 	List.iter (fun ((_,s1),(_,s2)) -> Hashtbl.add ht (n, s1, s2) true ) transitions
 
 (* Main conversion function *)
-let capture_regex_of_text (t : (char*int) list) : (char*int) cap_reg =
+let capture_regex_of_text (t : (char*int) list) : cap_reg =
 	let nb_parentheses = ref 0 in
 	let parentheses = ref [] in
 	let allowed_transitions_within_capture = Hashtbl.create 1 in
@@ -193,7 +189,7 @@ let capture_regex_of_text (t : (char*int) list) : (char*int) cap_reg =
 	(* 
 		res : closed and definitive content
 		or_content : last priority content (or is the operator with less priority)
-		on_going : still open unfinished content accu 
+		on_going : first priority content that will take *,+..etc. like a single letter or parentheses
 	 *)
 	let rec aux res or_content on_going = function
 	| ('\\', _)::('$', n)::[] -> aux res (Concat(or_content,on_going)) (Letters (['$'],n)) []
@@ -264,9 +260,8 @@ let capture_regex_of_text (t : (char*int) list) : (char*int) cap_reg =
 								parentheses = ( List.sort (fun (n1,m1) (n2,m2) -> n1 - n2) !parentheses);
 								allowed_transitions_within_capture = allowed_transitions_within_capture
 							} 
-	
 
-let rec simplify_regex (reg : 'a reg) : 'a reg =
+let rec simplify_regex (reg : reg) : reg =
 	match reg with 
 	| Letters _ -> reg 
 	| Or (a,b) -> begin
@@ -405,7 +400,7 @@ let reverse_find_path_of_spath (reversed_super_path : 'a list list) (reversed_wo
 				match do_intersect_on (Hashtbl.find_all back_delta (a, start)) sstate with
 						| None -> failwith "Transitions in super path should be allowed by the presence of an antecedant to any element in the next super state."
 						| Some s -> start::(find_from rev_pth' rev_w' s)
-			end
+			end 
 	in find_from reversed_super_path reversed_word from
 
 let find_accepting_path_reversed (det_auto) (back_delta) (word : char list) (rev_word : char list) =
@@ -421,7 +416,7 @@ let find_captures reversed_word reversed_path cap_info =
 	let captures = Array.make (cap_info.nb_parentheses + 1) [] in
 	let ht = cap_info.allowed_transitions_within_capture in 
 	let global_capture = ref "" in
-	let add_to_captures (a : char ) (s : int) (prev_s : int) =
+	let add_to_captures (a : char) (s : int) (prev_s : int) =
 		let rec aux (parentheses : (int*int) list ) (i : int)  = 
 			if i = 0 then 
 				(if s >= 0 then global_capture :=  (String.make 1 a)^(!global_capture); aux parentheses (i+1) )
@@ -453,11 +448,7 @@ let compile_capture_regex re_text =
 	let (auto, ps_info) = capture_automaton_of_regex_text re_text in 
 	let det_auto = determinised_automaton auto in
 	let back_delta = Hashtbl.create (List.length auto.transitions) in
-	let rec init_back_delta tr =
-		match tr with
-			| [] -> ()
-			| (q,a,q')::tr' -> (Hashtbl.add back_delta (a,q') q ;init_back_delta tr')
-	in init_back_delta auto.transitions;
+	List.iter ( fun (q,a,q') -> Hashtbl.add back_delta (a,q') q ) (List.rev auto.transitions);
 	{
 		captures_info = ps_info;
 		determinised_auto = det_auto; 
