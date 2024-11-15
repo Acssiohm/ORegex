@@ -18,7 +18,7 @@ Descriptions :
   within a text txt with :
   `capturer re txt`
   or
-  `capture (compile_regex re) txt`
+  `capture (compile_capture_regex re) txt`
 ### Supported regex syntax
 This section can also be used as a cheatsheet for regex supported here
 quick list : *, +, [...], ^, $, (...), ?, [^...], \s,\S,\d,\D,\w,\W,.,|
