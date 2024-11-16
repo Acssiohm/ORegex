@@ -21,5 +21,7 @@ Descriptions :
   `capture (compile_capture_regex re) txt`
 ### Supported regex syntax
 This section can also be used as a cheatsheet for regex supported here
+
 quick list : *, +, [...], ^, $, (...), ?, [^...], \s,\S,\d,\D,\w,\W,.,|
+
 currently not supported : \b,\B,(^...), ..etc (non exhaustive, to be completed)
